@@ -40,9 +40,9 @@ const UserSchema = new mongoose.Schema(
       enum: ["student", "alumni", "admin"],
       required: true,
     },
-    
-    isActive: { type: Boolean, default: false },
-    
+
+    isActive: { type: Boolean, default: true },
+
     lastActive: Date,
 
     isProfileComplete: {
@@ -60,31 +60,37 @@ const UserSchema = new mongoose.Schema(
     },
 
     // Refresh Token Management
-    refreshTokens: [{
-      token: {
-        type: String,
-        required: true,
+    refreshTokens: [
+      {
+        token: {
+          type: String,
+          required: true,
+        },
+        tokenId: {
+          type: String,
+          required: true,
+          unique: true,
+        },
+        createdAt: {
+          type: Date,
+          default: Date.now,
+        },
+        expiresAt: {
+          type: Date,
+          required: true,
+        },
+        userAgent: String,
+        ipAddress: String,
+        rememberMe: {
+          type: Boolean,
+          default: false,
+        },
+        isRevoked: {
+          type: Boolean,
+          default: false,
+        },
       },
-      tokenId: {
-        type: String,
-        required: true,
-        unique: true,
-      },
-      createdAt: {
-        type: Date,
-        default: Date.now,
-      },
-      expiresAt: {
-        type: Date,
-        required: true,
-      },
-      userAgent: String,
-      ipAddress: String,
-      isRevoked: {
-        type: Boolean,
-        default: false,
-      },
-    }],
+    ],
 
     // Account security
     loginAttempts: {
@@ -94,12 +100,14 @@ const UserSchema = new mongoose.Schema(
     },
 
     // Session management
-    activeSessions: [{
-      sessionId: String,
-      deviceInfo: String,
-      lastAccess: Date,
-      ipAddress: String,
-    }],
+    activeSessions: [
+      {
+        sessionId: String,
+        deviceInfo: String,
+        lastAccess: Date,
+        ipAddress: String,
+      },
+    ],
 
     mobileNumber: {
       type: String,
@@ -144,25 +152,20 @@ const UserSchema = new mongoose.Schema(
 
     college: {
       type: String,
-     
     },
 
     admissionYear: {
       type: Number,
-     
     },
 
     passoutYear: {
       type: Number,
-      
     },
     degree: {
       type: String,
-      
     },
     department: {
       type: String,
-      
     },
     gender: {
       type: String,
@@ -183,18 +186,18 @@ const UserSchema = new mongoose.Schema(
       type: String,
       trim: true,
     },
-    
+
     currentCompany: {
       type: String,
       trim: true,
     },
-    
+
     currentSalary: {
       amount: { type: Number, min: 0 },
       currency: { type: String, default: "INR" },
       type: { type: String, enum: ["monthly", "yearly"], default: "yearly" },
     },
-    
+
     workLocation: {
       type: String,
       trim: true,
@@ -279,13 +282,20 @@ UserSchema.methods.isPasswordCorrect = async function (password) {
 
 // Refresh token management methods
 UserSchema.methods.addRefreshToken = async function (tokenData) {
-  const { token, tokenId, expiresAt, userAgent = '', ipAddress = '' } = tokenData;
-  
+  const {
+    token,
+    tokenId,
+    expiresAt,
+    userAgent = "",
+    ipAddress = "",
+    rememberMe = false,
+  } = tokenData;
+
   // Remove expired tokens and limit active tokens to 5
-  this.refreshTokens = this.refreshTokens.filter(
-    (rt) => rt.expiresAt > new Date() && !rt.isRevoked
-  ).slice(-4); // Keep only the latest 4 tokens
-  
+  this.refreshTokens = this.refreshTokens
+    .filter((rt) => rt.expiresAt > new Date() && !rt.isRevoked)
+    .slice(-4); // Keep only the latest 4 tokens
+
   // Add new refresh token
   this.refreshTokens.push({
     token,
@@ -293,10 +303,11 @@ UserSchema.methods.addRefreshToken = async function (tokenData) {
     expiresAt,
     userAgent,
     ipAddress,
+    rememberMe,
     createdAt: new Date(),
     isRevoked: false,
   });
-  
+
   await this.save();
 };
 
@@ -304,13 +315,13 @@ UserSchema.methods.revokeRefreshToken = async function (tokenId) {
   const tokenIndex = this.refreshTokens.findIndex(
     (rt) => rt.tokenId === tokenId
   );
-  
+
   if (tokenIndex !== -1) {
     this.refreshTokens[tokenIndex].isRevoked = true;
     await this.save();
     return true;
   }
-  
+
   return false;
 };
 
@@ -337,20 +348,22 @@ UserSchema.methods.isRefreshTokenValid = function (tokenId) {
 // Account security methods
 UserSchema.methods.incrementLoginAttempts = async function () {
   // If we have a previous attempt and it's been more than 15 minutes, reset attempts
-  if (this.loginAttempts.lastAttempt && 
-      Date.now() - this.loginAttempts.lastAttempt.getTime() > 15 * 60 * 1000) {
+  if (
+    this.loginAttempts.lastAttempt &&
+    Date.now() - this.loginAttempts.lastAttempt.getTime() > 15 * 60 * 1000
+  ) {
     this.loginAttempts.count = 1;
   } else {
     this.loginAttempts.count += 1;
   }
-  
+
   this.loginAttempts.lastAttempt = new Date();
-  
-  // Lock account after 5 failed attempts for 30 minutes
+
+  // Lock account after 5 failed attempts for 1 minute
   if (this.loginAttempts.count >= 5) {
-    this.loginAttempts.lockedUntil = new Date(Date.now() + 30 * 60 * 1000);
+    this.loginAttempts.lockedUntil = new Date(Date.now() + 1 * 60 * 1000);
   }
-  
+
   await this.save();
 };
 
@@ -362,16 +375,19 @@ UserSchema.methods.resetLoginAttempts = async function () {
 };
 
 UserSchema.methods.isAccountLocked = function () {
-  return this.loginAttempts.lockedUntil && this.loginAttempts.lockedUntil > new Date();
+  return (
+    this.loginAttempts.lockedUntil &&
+    this.loginAttempts.lockedUntil > new Date()
+  );
 };
 
 // Session management methods
 UserSchema.methods.addSession = async function (sessionData) {
   const { sessionId, deviceInfo, ipAddress } = sessionData;
-  
+
   // Remove old sessions (keep only 10 most recent)
   this.activeSessions = this.activeSessions.slice(-9);
-  
+
   // Add new session
   this.activeSessions.push({
     sessionId,
@@ -379,7 +395,7 @@ UserSchema.methods.addSession = async function (sessionData) {
     ipAddress,
     lastAccess: new Date(),
   });
-  
+
   await this.save();
 };
 

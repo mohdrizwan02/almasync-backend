@@ -45,7 +45,7 @@ const registerAdmin = asyncHandler(async (req, res) => {
 });
 
 const loginAdmin = asyncHandler(async (req, res) => {
-  const { email, password } = req.body;
+  const { email, password, rememberMe = false } = req.body;
 
   if (!email || !password) {
     throw new ApiError(400, "All fields are required");
@@ -78,15 +78,16 @@ const loginAdmin = asyncHandler(async (req, res) => {
   const adminPayload = createAdminPayload(admin);
 
   // Generate token pair
-  const { accessToken, refreshToken, tokenType, expiresIn } = await generateTokenPair(adminPayload);
+  const { accessToken, refreshToken, tokenType, expiresIn, refreshExpiresIn, rememberMe: tokenRememberMe } = await generateTokenPair(adminPayload, rememberMe);
 
   // Store refresh token in database
   const refreshTokenData = {
     token: refreshToken,
     tokenId: uuidv4(),
-    expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
+    expiresAt: new Date(Date.now() + (rememberMe ? 30 * 24 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000)), // 30 days if remember me, 7 days otherwise
     userAgent: req.get('User-Agent') || '',
     ipAddress: req.ip || req.connection.remoteAddress || '',
+    rememberMe: rememberMe,
   };
 
   await admin.addRefreshToken(refreshTokenData);
@@ -102,7 +103,7 @@ const loginAdmin = asyncHandler(async (req, res) => {
   return res
     .status(200)
     .cookie("adminAccessToken", accessToken, getCookieOptions('access'))
-    .cookie("adminRefreshToken", refreshToken, getCookieOptions('refresh'))
+    .cookie("adminRefreshToken", refreshToken, getCookieOptions('refresh', rememberMe))
     .json(
       new ApiResponse(
         200,
@@ -131,7 +132,7 @@ const logoutAdmin = asyncHandler(async (req, res) => {
     if (refreshToken) {
       try {
         const decoded = await verifyRefreshToken(refreshToken);
-        const admin = await User.findById(decoded._id);
+        const admin = await User.findById(decoded.userId);
         
         if (admin && decoded.jti) {
           // Revoke the specific refresh token
@@ -181,7 +182,7 @@ const refreshAdminToken = asyncHandler(async (req, res) => {
     validateTokenPayload(decoded, 'refresh');
 
     // Find admin and validate refresh token
-    const admin = await User.findById(decoded._id);
+    const admin = await User.findById(decoded.userId);
     if (!admin || admin.role !== 'admin') {
       throw new ApiError(401, "Invalid admin refresh token - admin not found");
     }
